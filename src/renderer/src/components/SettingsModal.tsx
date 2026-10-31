@@ -1,11 +1,31 @@
-import type { Settings, Theme } from '@shared/types'
+import type { Settings, Theme, UpdateStatus } from '@shared/types'
 import { APP_NAME, AUTHOR, COPYRIGHT, LICENSE } from '@shared/about'
 import { XIcon } from './Icons'
 
 interface Props {
   settings: Settings
+  update: UpdateStatus
   onClose: () => void
   onTestReminder: () => void
+}
+
+function updateText(u: UpdateStatus): string {
+  switch (u.state) {
+    case 'dev':
+      return 'Updates are disabled when running from source (npm run dev).'
+    case 'idle':
+      return 'Checks for updates automatically every few hours.'
+    case 'checking':
+      return 'Checking for updates…'
+    case 'up-to-date':
+      return "You're on the latest version."
+    case 'downloading':
+      return `Downloading version ${u.version ?? ''}… ${u.percent ?? 0}%`
+    case 'ready':
+      return `Version ${u.version} is downloaded and ready to install.`
+    case 'error':
+      return `Couldn't check for updates: ${u.error ?? 'unknown error'}`
+  }
 }
 
 const REPEAT_OPTIONS = [
@@ -17,7 +37,7 @@ const REPEAT_OPTIONS = [
   { value: 240, label: 'Every 4 hours' }
 ]
 
-export function SettingsModal({ settings, onClose, onTestReminder }: Props) {
+export function SettingsModal({ settings, update, onClose, onTestReminder }: Props) {
   const set = (patch: Partial<Settings>): Promise<void> => window.api.updateSettings(patch)
 
   return (
@@ -104,6 +124,25 @@ export function SettingsModal({ settings, onClose, onTestReminder }: Props) {
                 {COPYRIGHT} · {LICENSE}
               </div>
             </div>
+          </div>
+          <div className="setting">
+            <div>
+              <div className="setting-label">Updates</div>
+              <div className={`setting-desc ${update.state === 'error' ? 'error-text' : ''}`}>{updateText(update)}</div>
+            </div>
+            {update.state === 'ready' ? (
+              <button className="btn primary" onClick={() => window.api.installUpdate()}>
+                Restart &amp; update
+              </button>
+            ) : (
+              <button
+                className="btn"
+                disabled={update.state === 'dev' || update.state === 'checking' || update.state === 'downloading'}
+                onClick={() => window.api.checkForUpdates()}
+              >
+                Check now
+              </button>
+            )}
           </div>
         </section>
       </div>

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { AppData, Navigate, TodoApi } from '@shared/types'
+import type { AppData, Navigate, TodoApi, UpdateStatus } from '@shared/types'
 
 function subscribe<T>(channel: string, cb: (value: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, value: T): void => cb(value)
@@ -21,7 +21,11 @@ const api: TodoApi = {
   renameList: (id, name) => ipcRenderer.invoke('list:rename', id, name),
   deleteList: (id) => ipcRenderer.invoke('list:delete', id),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
-  sendOverdueReminder: () => ipcRenderer.invoke('reminder:sendNow')
+  sendOverdueReminder: () => ipcRenderer.invoke('reminder:sendNow'),
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
+  onUpdateStatus: (cb) => subscribe<UpdateStatus>('update-status', cb),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install')
 }
 
 contextBridge.exposeInMainWorld('api', api)

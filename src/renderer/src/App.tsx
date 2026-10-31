@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { INBOX_ID, type AppData, type Task } from '@shared/types'
+import { INBOX_ID, type AppData, type Task, type UpdateStatus } from '@shared/types'
 import { isOverdue } from '@shared/time'
 import { compareTasks, inSmartView, matchesQuery, SMART_VIEWS, type DuePreset, type View } from './views'
 import { Sidebar } from './components/Sidebar'
@@ -7,7 +7,7 @@ import { QuickAdd } from './components/QuickAdd'
 import { TaskRow } from './components/TaskRow'
 import { TaskDetail } from './components/TaskDetail'
 import { SettingsModal } from './components/SettingsModal'
-import { AlertIcon, BellIcon, PencilIcon, SearchIcon, SettingsIcon, TrashIcon, XIcon } from './components/Icons'
+import { AlertIcon, BellIcon, DownloadIcon, PencilIcon, SearchIcon, SettingsIcon, TrashIcon, XIcon } from './components/Icons'
 
 interface Toast {
   id: number
@@ -35,13 +35,17 @@ export default function App() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [toast, setToast] = useState<Toast | null>(null)
   const [now, setNow] = useState(Date.now())
+  const [update, setUpdate] = useState<UpdateStatus>({ state: 'idle' })
+  const [hideUpdate, setHideUpdate] = useState(false)
 
   const addRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     window.api.getState().then(setData)
+    window.api.getUpdateStatus().then(setUpdate)
     const offState = window.api.onState(setData)
+    const offUpdate = window.api.onUpdateStatus(setUpdate)
     const offNav = window.api.onNavigate((nav) => {
       setQuery('')
       setView({ kind: 'smart', id: 'overdue' })
@@ -51,6 +55,7 @@ export default function App() {
     const tick = setInterval(() => setNow(Date.now()), 15_000)
     return () => {
       offState()
+      offUpdate()
       offNav()
       clearInterval(tick)
     }
@@ -247,6 +252,21 @@ export default function App() {
         </header>
 
         <div className="content">
+          {update.state === 'ready' && !hideUpdate && (
+            <div className="banner info">
+              <DownloadIcon width={18} height={18} />
+              <span>
+                <strong>Todo {update.version} is ready.</strong> Restart to finish updating. Your tasks are kept.
+              </span>
+              <button className="btn sm" onClick={() => setHideUpdate(true)}>
+                Later
+              </button>
+              <button className="btn sm primary" onClick={() => window.api.installUpdate()}>
+                Restart now
+              </button>
+            </div>
+          )}
+
           {overdueCount > 0 && !(view.kind === 'smart' && view.id === 'overdue') && !searching && (
             <div className="banner">
               <AlertIcon width={18} height={18} />
@@ -313,7 +333,12 @@ export default function App() {
       )}
 
       {showSettings && (
-        <SettingsModal settings={data.settings} onClose={() => setShowSettings(false)} onTestReminder={sendReminder} />
+        <SettingsModal
+          settings={data.settings}
+          update={update}
+          onClose={() => setShowSettings(false)}
+          onTestReminder={sendReminder}
+        />
       )}
 
       {toast && (

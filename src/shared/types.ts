@@ -50,6 +50,14 @@ export type Navigate = { view: 'overdue' } | { view: 'task'; taskId: string }
 
 export const INBOX_ID = 'inbox'
 
+export interface UpdateStatus {
+  /** 'dev' = running from source, where updates are disabled. */
+  state: 'dev' | 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'ready' | 'error'
+  version?: string
+  percent?: number
+  error?: string
+}
+
 export interface TodoApi {
   getState(): Promise<AppData>
   onState(cb: (data: AppData) => void): () => void
@@ -66,4 +74,9 @@ export interface TodoApi {
   updateSettings(patch: Partial<Settings>): Promise<void>
   /** Shows a notification for every overdue task now. Returns how many were overdue. */
   sendOverdueReminder(): Promise<number>
+  getUpdateStatus(): Promise<UpdateStatus>
+  onUpdateStatus(cb: (s: UpdateStatus) => void): () => void
+  checkForUpdates(): Promise<void>
+  /** Restarts the app into the downloaded update. */
+  installUpdate(): Promise<void>
 }

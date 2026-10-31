@@ -473,6 +473,16 @@ button:disabled {
   color: var(--text);
 }
 
+.banner.info {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.error-text {
+  color: var(--danger);
+}
+
 /* ---------- Quick add ---------- */
 
 .quick-add {

@@ -4,6 +4,7 @@ import type { NewTask, Settings, Task, TaskPatch } from '@shared/types'
 import icon from '../../resources/icon.png?asset'
 import { ReminderService } from './reminders'
 import { Store } from './store'
+import { UpdateService } from './updater'
 
 const startHidden = process.argv.includes('--hidden')
 
@@ -12,6 +13,7 @@ let tray: Tray | null = null
 let quitting = false
 let store: Store
 let reminders: ReminderService
+let updater: UpdateService
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -49,6 +51,18 @@ function init(): void {
     }
   )
 
+  updater = new UpdateService(
+    icon,
+    (status) => {
+      win?.webContents.send('update-status', status)
+      updateTray()
+    },
+    // Let the window actually close instead of hiding to the tray.
+    () => {
+      quitting = true
+    }
+  )
+
   registerIpc()
   createWindow()
   createTray()
@@ -58,6 +72,7 @@ function init(): void {
     updateTray()
   })
   reminders.start()
+  updater.start()
 }
 
 function createWindow(): void {
@@ -124,6 +139,7 @@ function createTray(): void {
 function updateTray(): void {
   if (!tray) return
   const count = reminders.overdue().length
+  const update = updater.status
   tray.setToolTip(count ? `Todo — ${count} overdue` : 'Todo')
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -134,6 +150,9 @@ function updateTray(): void {
         click: () => reminders.sendNow()
       },
       { type: 'separator' },
+      ...(update.state === 'ready'
+        ? [{ label: `Restart to update (v${update.version})`, click: () => updater.install() }]
+        : []),
       {
         label: 'Quit',
         click: () => {
@@ -169,6 +188,9 @@ function registerIpc(): void {
     applySettings(store.data.settings)
   })
   ipcMain.handle('reminder:sendNow', () => reminders.sendNow())
+  ipcMain.handle('update:status', () => updater.status)
+  ipcMain.handle('update:check', () => updater.check())
+  ipcMain.handle('update:install', () => updater.install())
 }
 
 app.on('before-quit', () => {

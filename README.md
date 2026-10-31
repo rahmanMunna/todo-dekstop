@@ -46,7 +46,9 @@ A clean, fast Windows desktop todo app whose main job is **making sure you never
 Copy the same `Todo Setup <version>.exe` to that PC and repeat the steps above. Nothing else is needed: no Node.js and no source code.
 
 ### Updating
-Run the newer installer over the existing installation. Your tasks are kept.
+**Automatic (version 0.2.0 and later):** Todo checks GitHub Releases shortly after it starts and then every 4 hours. It downloads new versions in the background. When an update is ready, you'll see a **Restart now** banner. If you ignore it, the update installs the next time Todo quits. You can also check manually in **Settings → About → Check now**. Your tasks are always kept.
+
+**Manual:** run a newer installer over the existing installation.
 
 ### Uninstalling
 Windows **Settings → Apps → Installed apps → Todo → Uninstall**. Your tasks file is kept, in case you reinstall.
@@ -75,12 +77,30 @@ npm run typecheck  # TypeScript checks
 npm run dist       # build the Windows installer into dist/
 ```
 
-Before releasing a new build, bump `"version"` in `package.json`.
+### Publishing an update (auto-update)
+
+Installed copies update themselves from this repo's [GitHub Releases](https://github.com/rahmanMunna/todo-dekstop/releases).
+
+**One-time setup:** create a GitHub token at **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**. Give it access to the `todo-dekstop` repo only, with the **Contents: Read and write** permission.
+
+**Each release:**
+
+1. Bump `"version"` in `package.json`, e.g. `0.2.0` → `0.2.1`. The version must go up, or apps won't see an update.
+2. Run:
+
+   ```powershell
+   $env:GH_TOKEN = "<your token>"
+   npm run release
+   ```
+
+This builds the installer and publishes it as a GitHub Release tagged `v<version>`. Every installed Todo picks it up within a few hours, or right away via **Check now**.
+
+`npm run dist` only builds the installer locally and publishes nothing.
 
 > **Troubleshooting:** if Electron starts as plain Node (`Cannot read properties of undefined (reading 'requestSingleInstanceLock')`), your shell has `ELECTRON_RUN_AS_NODE` set. Some editor terminals set it. Clear it with `Remove-Item Env:ELECTRON_RUN_AS_NODE` (PowerShell) or `unset ELECTRON_RUN_AS_NODE` (bash).
 
 ### Tech stack
-Electron, React 19, TypeScript and electron-vite. Data is saved to a local JSON file with atomic writes.
+Electron, React 19, TypeScript, electron-vite, and electron-builder + electron-updater for the installer and auto-updates. Data is saved to a local JSON file with atomic writes.
 
 ### Code layout
 
@@ -88,6 +108,7 @@ Electron, React 19, TypeScript and electron-vite. Data is saved to a local JSON 
 | --- | --- |
 | `src/main/index.ts` | Window, tray, IPC, startup and theme settings |
 | `src/main/reminders.ts` | Overdue reminder scheduler, notifications and the blocked-notification fallback |
+| `src/main/updater.ts` | Auto-update from GitHub Releases |
 | `src/main/store.ts` | Data persistence |
 | `src/preload/index.ts` | Secure `window.api` bridge to the UI |
 | `src/renderer/` | React UI |

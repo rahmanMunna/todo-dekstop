@@ -1,7 +1,7 @@
 {
   "name": "todo-desktop",
   "productName": "Todo",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Desktop todo app with overdue task reminders",
   "main": "./out/main/index.js",
   "author": "MD Habibur Rahman Munna",
@@ -13,12 +13,19 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "icon": "node scripts/make-icon.mjs",
-    "dist": "electron-vite build && electron-builder --win"
+    "dist": "electron-vite build && electron-builder --win --publish never",
+    "release": "electron-vite build && electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.rahmanmunna.todo",
     "productName": "Todo",
     "copyright": "Copyright © 2026 MD Habibur Rahman Munna",
+    "publish": {
+      "provider": "github",
+      "owner": "rahmanMunna",
+      "repo": "todo-dekstop",
+      "releaseType": "release"
+    },
     "directories": {
       "buildResources": "build",
       "output": "dist"
@@ -54,5 +61,8 @@
     "react-dom": "^19.3.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }
