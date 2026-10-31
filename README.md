@@ -96,7 +96,7 @@ Installed copies update themselves from this repo's [GitHub Releases](https://gi
    npm run release
    ```
 
-This builds the installer and publishes it as a GitHub Release tagged `v<version>`. Every installed Todo picks it up within a few hours, or right away via **Check now**.
+This builds the installer and publishes it as a GitHub Release tagged `v<version>`. The script ([scripts/release.mjs](scripts/release.mjs)) creates the release as a hidden draft first, uploads the files, checks that `latest.yml`, the `.exe` and the `.blockmap` are all there, and only then publishes it. Users never see a half-uploaded release. If a run fails partway, just run it again; it continues into the same release. Every installed Todo picks it up within a few hours, or right away via **Check now**.
 
 `npm run dist` only builds the installer locally and publishes nothing.
 
