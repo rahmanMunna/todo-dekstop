@@ -24,15 +24,26 @@ const fail = (msg) => {
 if (!token) fail('GH_TOKEN is not set. Run:  $env:GH_TOKEN = "<your token>"')
 
 async function gh(path, init = {}) {
-  const res = await fetch(`${api}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      ...init.headers
+  let res
+  // Retry network errors (e.g. ECONNABORTED right after a long upload).
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await fetch(`${api}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+          ...init.headers
+        }
+      })
+      break
+    } catch (err) {
+      if (attempt === 4) fail(`Network error calling GitHub (${path}): ${err.cause?.code ?? err.message}`)
+      console.warn(`Network error (${err.cause?.code ?? err.message}), retrying in ${attempt * 2}s…`)
+      await new Promise((r) => setTimeout(r, attempt * 2000))
     }
-  })
+  }
   if (!res.ok) fail(`GitHub API ${init.method ?? 'GET'} ${path} → ${res.status}\n${await res.text()}`)
   return res.status === 204 ? null : res.json()
 }
