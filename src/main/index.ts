@@ -197,6 +197,8 @@ app.on('before-quit', () => {
   quitting = true
 })
 
+app.on('will-quit', () => store?.close())
+
 // Keep running in the tray when all windows are closed; reminders live here.
 app.on('window-all-closed', () => {
   if (!store?.data.settings.closeToTray) app.quit()

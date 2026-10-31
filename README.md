@@ -59,10 +59,13 @@ Windows **Settings → Apps → Installed apps → Todo → Uninstall**. Your ta
 
 | Question | Answer |
 |---|---|
-| Where are my tasks stored? | `%APPDATA%\Todo\todo-data.json` on your PC. Press `Win + R`, paste `%APPDATA%\Todo` and press Enter to open the folder. |
-| Do they survive closing the app, restarting the PC, updates or uninstalling? | **Yes.** Every change is saved to disk immediately. |
+| Where are my tasks stored? | In a local **SQLite** database, `%APPDATA%\Todo\todo.db`. Press `Win + R`, paste `%APPDATA%\Todo` and press Enter to open the folder. |
+| Do they survive closing the app, restarting the PC, updates or uninstalling? | **Yes.** Every change is committed to the database immediately. |
 | Is data shared between PCs? | **No.** Each PC (and each Windows user) has its own separate tasks. There's no account and no cloud. |
-| How do I back up or move my tasks? | Quit Todo (tray icon → **Quit**), then copy `todo-data.json`. To restore, paste it into the same folder on the target PC. This **replaces** that PC's tasks; it doesn't merge them. |
+| How do I back up or move my tasks? | Quit Todo (tray icon → **Quit**), then copy `todo.db`. To restore, paste it into the same folder on the target PC. This **replaces** that PC's tasks; it doesn't merge them. Only copy it while Todo is fully quit. |
+| I used a version before 0.3.0. Where did my data go? | Older versions saved to `todo-data.json`. Version 0.3.0 imports it into `todo.db` automatically on first launch and keeps the old file as `todo-data.json.imported-backup`. |
+
+You can inspect the database with any SQLite viewer, such as [DB Browser for SQLite](https://sqlitebrowser.org/).
 
 ---
 
@@ -100,7 +103,21 @@ This builds the installer and publishes it as a GitHub Release tagged `v<version
 > **Troubleshooting:** if Electron starts as plain Node (`Cannot read properties of undefined (reading 'requestSingleInstanceLock')`), your shell has `ELECTRON_RUN_AS_NODE` set. Some editor terminals set it. Clear it with `Remove-Item Env:ELECTRON_RUN_AS_NODE` (PowerShell) or `unset ELECTRON_RUN_AS_NODE` (bash).
 
 ### Tech stack
-Electron, React 19, TypeScript, electron-vite, and electron-builder + electron-updater for the installer and auto-updates. Data is saved to a local JSON file with atomic writes.
+Electron, React 19, TypeScript, electron-vite, and electron-builder + electron-updater for the installer and auto-updates. Data lives in **SQLite**, using Node's built-in `node:sqlite` module (no native add-on to compile), with WAL mode, foreign keys and versioned migrations.
+
+### Architecture
+
+```
+Renderer (React UI)  ──window.api──►  Preload  ──IPC──►  Main process (Node)  ──►  SQLite (todo.db)
+        ▲                                                   │
+        └──────────── 'state' push after every write ───────┘
+```
+
+The main process is the "backend": it owns the database, runs the reminder scheduler and talks to Windows (tray, notifications, startup). The UI can only reach it through the small `window.api` bridge.
+
+### Changing the database schema
+
+Migrations live in `src/main/db.ts` as an ordered list. To change the schema, **append** a new SQL string; never edit one that has already shipped. Each install applies the new migrations once on startup, tracked by `PRAGMA user_version`.
 
 ### Code layout
 
@@ -109,7 +126,8 @@ Electron, React 19, TypeScript, electron-vite, and electron-builder + electron-u
 | `src/main/index.ts` | Window, tray, IPC, startup and theme settings |
 | `src/main/reminders.ts` | Overdue reminder scheduler, notifications and the blocked-notification fallback |
 | `src/main/updater.ts` | Auto-update from GitHub Releases |
-| `src/main/store.ts` | Data persistence |
+| `src/main/db.ts` | SQLite connection, schema and migrations |
+| `src/main/store.ts` | Data access (queries and writes), plus the one-time JSON import |
 | `src/preload/index.ts` | Secure `window.api` bridge to the UI |
 | `src/renderer/` | React UI |
 | `src/shared/` | Types, date helpers and app/author info used by both sides |

@@ -3,15 +3,18 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import {
   INBOX_ID,
   type AppData,
   type NewTask,
+  type Priority,
   type Settings,
   type Task,
   type TaskPatch,
   type TodoList
 } from '@shared/types'
+import { openDatabase, transaction } from './db'
 
 const defaultSettings: Settings = {
   repeatMinutes: 60,
@@ -21,61 +24,74 @@ const defaultSettings: Settings = {
   trayHintShown: false
 }
 
-function defaults(): AppData {
-  return {
-    version: 1,
-    lists: [{ id: INBOX_ID, name: 'Inbox', color: '#6366f1', createdAt: Date.now() }],
-    tasks: [],
-    settings: { ...defaultSettings }
-  }
-}
+const INBOX: TodoList = { id: INBOX_ID, name: 'Inbox', color: '#6366f1', createdAt: 0 }
+
+type Row = Record<string, unknown>
+
+const toTask = (r: Row): Task => ({
+  id: r.id as string,
+  listId: r.list_id as string,
+  title: r.title as string,
+  notes: r.notes as string,
+  priority: r.priority as Priority,
+  dueAt: r.due_at as number | null,
+  done: r.done === 1,
+  completedAt: r.completed_at as number | null,
+  createdAt: r.created_at as number,
+  updatedAt: r.updated_at as number,
+  snoozedUntil: r.snoozed_until as number | null,
+  lastRemindedAt: r.last_reminded_at as number | null
+})
+
+const toList = (r: Row): TodoList => ({
+  id: r.id as string,
+  name: r.name as string,
+  color: r.color as string,
+  createdAt: r.created_at as number
+})
 
 /**
- * Owns all app data. Persists to a JSON file in the user data folder with
- * atomic writes, and emits 'change' after every mutation.
+ * Owns all app data. SQLite (todo.db in the user data folder) is the source of
+ * truth; `data` is an in-memory snapshot of it for the UI and reminders,
+ * refreshed after every write. Emits 'change' after every mutation.
  */
 export class Store extends EventEmitter {
-  private file = path.join(app.getPath('userData'), 'todo-data.json')
-  data: AppData = defaults()
+  private dir = app.getPath('userData')
+  private db!: DatabaseSync
+  data: AppData = { version: 1, lists: [], tasks: [], settings: { ...defaultSettings } }
 
   load(): void {
-    if (!fs.existsSync(this.file)) return this.save()
-    try {
-      // Strip a BOM in case the file was hand-edited (e.g. by Notepad/PowerShell).
-      const text = fs.readFileSync(this.file, 'utf8').replace(/^﻿/, '')
-      const raw = JSON.parse(text) as Partial<AppData>
-      const base = defaults()
-      this.data = {
-        version: 1,
-        lists: raw.lists?.length ? raw.lists : base.lists,
-        tasks: raw.tasks ?? [],
-        settings: { ...base.settings, ...raw.settings }
-      }
-      if (!this.data.lists.some((l) => l.id === INBOX_ID)) this.data.lists.unshift(base.lists[0])
-    } catch (err) {
-      // Keep the unreadable file for recovery instead of overwriting it.
-      const backup = `${this.file}.corrupt-${Date.now()}`
-      fs.copyFileSync(this.file, backup)
-      console.error(`Could not read ${this.file}, backed up to ${backup}`, err)
-      this.data = defaults()
-      this.save()
-    }
+    this.db = openDatabase(path.join(this.dir, 'todo.db'))
+    this.importLegacyJson()
+    this.db.prepare('INSERT OR IGNORE INTO lists (id, name, color, created_at) VALUES (?, ?, ?, ?)').run(
+      INBOX.id,
+      INBOX.name,
+      INBOX.color,
+      Date.now()
+    )
+    this.refresh()
   }
 
-  private save(): void {
-    const json = JSON.stringify(this.data, null, 2)
-    const tmp = `${this.file}.tmp`
-    try {
-      fs.writeFileSync(tmp, json)
-      fs.renameSync(tmp, this.file)
-    } catch {
-      // Rename can fail on Windows if the file is briefly locked (e.g. antivirus).
-      fs.writeFileSync(this.file, json)
+  close(): void {
+    this.db?.close()
+  }
+
+  /** Re-reads everything from the database into the `data` snapshot. */
+  private refresh(): void {
+    const lists = this.db.prepare('SELECT * FROM lists ORDER BY created_at').all().map(toList)
+    // Inbox always first.
+    lists.sort((a, b) => Number(b.id === INBOX_ID) - Number(a.id === INBOX_ID))
+    const tasks = this.db.prepare('SELECT * FROM tasks').all().map(toTask)
+    const settings = { ...defaultSettings }
+    for (const r of this.db.prepare('SELECT key, value FROM settings').all()) {
+      const key = r.key as string
+      if (key in settings) Object.assign(settings, { [key]: JSON.parse(r.value as string) })
     }
+    this.data = { version: 1, lists, tasks, settings }
   }
 
   private commit(): void {
-    this.save()
+    this.refresh()
     this.emit('change', this.data)
   }
 
@@ -83,13 +99,41 @@ export class Store extends EventEmitter {
     return this.data.tasks.find((t) => t.id === id)
   }
 
+  private listExists(id: string | undefined): boolean {
+    return id !== undefined && this.data.lists.some((l) => l.id === id)
+  }
+
+  /** Inserts or fully overwrites a task row. */
+  private writeTask(t: Task): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tasks
+           (id, list_id, title, notes, priority, due_at, done, completed_at,
+            created_at, updated_at, snoozed_until, last_reminded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        t.id,
+        t.listId,
+        t.title,
+        t.notes,
+        t.priority,
+        t.dueAt,
+        t.done ? 1 : 0,
+        t.completedAt,
+        t.createdAt,
+        t.updatedAt,
+        t.snoozedUntil,
+        t.lastRemindedAt
+      )
+  }
+
   createTask(input: NewTask): Task {
     const now = Date.now()
-    const listId = this.data.lists.some((l) => l.id === input.listId) ? input.listId! : INBOX_ID
     const dueAt = input.dueAt ?? null
     const task: Task = {
       id: randomUUID(),
-      listId,
+      listId: this.listExists(input.listId) ? input.listId! : INBOX_ID,
       title: input.title.trim(),
       notes: input.notes ?? '',
       priority: input.priority ?? 0,
@@ -103,19 +147,20 @@ export class Store extends EventEmitter {
       // the repeat interval will still remind about it later.
       lastRemindedAt: dueAt !== null && dueAt <= now ? now : null
     }
-    this.data.tasks.push(task)
+    this.writeTask(task)
     this.commit()
     return task
   }
 
   updateTask(id: string, patch: TaskPatch): void {
-    const t = this.task(id)
-    if (!t) return
+    const current = this.task(id)
+    if (!current) return
+    const t = { ...current }
     const now = Date.now()
     if (patch.title !== undefined) t.title = patch.title.trim() || t.title
     if (patch.notes !== undefined) t.notes = patch.notes
     if (patch.priority !== undefined) t.priority = patch.priority
-    if (patch.listId !== undefined && this.data.lists.some((l) => l.id === patch.listId)) t.listId = patch.listId
+    if (this.listExists(patch.listId)) t.listId = patch.listId!
     if (patch.dueAt !== undefined && patch.dueAt !== t.dueAt) {
       t.dueAt = patch.dueAt
       t.snoozedUntil = null
@@ -126,69 +171,105 @@ export class Store extends EventEmitter {
       t.completedAt = patch.done ? now : null
     }
     t.updatedAt = now
+    this.writeTask(t)
     this.commit()
   }
 
   deleteTask(id: string): Task | null {
-    const i = this.data.tasks.findIndex((t) => t.id === id)
-    if (i === -1) return null
-    const [removed] = this.data.tasks.splice(i, 1)
+    const removed = this.task(id) ?? null
+    if (!removed) return null
+    this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     this.commit()
     return removed
   }
 
   restoreTask(task: Task): void {
     if (this.task(task.id)) return
-    if (!this.data.lists.some((l) => l.id === task.listId)) task.listId = INBOX_ID
-    this.data.tasks.push(task)
+    this.writeTask({ ...task, listId: this.listExists(task.listId) ? task.listId : INBOX_ID })
     this.commit()
   }
 
   snoozeTask(id: string, until: number): void {
-    const t = this.task(id)
-    if (!t) return
-    t.snoozedUntil = until
-    t.updatedAt = Date.now()
+    this.db.prepare('UPDATE tasks SET snoozed_until = ?, updated_at = ? WHERE id = ?').run(until, Date.now(), id)
     this.commit()
   }
 
   markReminded(ids: string[], at = Date.now()): void {
-    for (const id of ids) {
-      const t = this.task(id)
-      if (t) t.lastRemindedAt = at
-    }
+    const stmt = this.db.prepare('UPDATE tasks SET last_reminded_at = ? WHERE id = ?')
+    transaction(this.db, () => ids.forEach((id) => stmt.run(at, id)))
     this.commit()
   }
 
   clearCompleted(): void {
-    this.data.tasks = this.data.tasks.filter((t) => !t.done)
+    this.db.exec('DELETE FROM tasks WHERE done = 1')
     this.commit()
   }
 
   createList(name: string, color: string): TodoList {
     const list: TodoList = { id: randomUUID(), name: name.trim() || 'Untitled', color, createdAt: Date.now() }
-    this.data.lists.push(list)
+    this.db.prepare('INSERT INTO lists (id, name, color, created_at) VALUES (?, ?, ?, ?)').run(
+      list.id,
+      list.name,
+      list.color,
+      list.createdAt
+    )
     this.commit()
     return list
   }
 
   renameList(id: string, name: string): void {
-    const list = this.data.lists.find((l) => l.id === id)
-    if (!list || !name.trim()) return
-    list.name = name.trim()
+    if (!name.trim()) return
+    this.db.prepare('UPDATE lists SET name = ? WHERE id = ?').run(name.trim(), id)
     this.commit()
   }
 
-  /** Deletes the list and every task in it. The Inbox can't be deleted. */
+  /** Deletes the list and (via ON DELETE CASCADE) every task in it. The Inbox can't be deleted. */
   deleteList(id: string): void {
     if (id === INBOX_ID) return
-    this.data.lists = this.data.lists.filter((l) => l.id !== id)
-    this.data.tasks = this.data.tasks.filter((t) => t.listId !== id)
+    this.db.prepare('DELETE FROM lists WHERE id = ?').run(id)
     this.commit()
   }
 
   updateSettings(patch: Partial<Settings>): void {
-    this.data.settings = { ...this.data.settings, ...patch }
+    const stmt = this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
+    transaction(this.db, () => {
+      for (const [key, value] of Object.entries(patch)) {
+        if (key in defaultSettings && value !== undefined) stmt.run(key, JSON.stringify(value))
+      }
+    })
     this.commit()
+  }
+
+  /**
+   * One-time import from the JSON file used by versions before 0.3.0.
+   * The old file is renamed (not deleted) so it remains as a backup.
+   */
+  private importLegacyJson(): void {
+    const file = path.join(this.dir, 'todo-data.json')
+    if (!fs.existsSync(file)) return
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM lists').get() as { n: number }
+    if (n > 0) return // already have data; never import twice
+
+    let legacy: Partial<AppData>
+    try {
+      legacy = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))
+    } catch (err) {
+      console.error(`Could not read legacy ${file}; skipping import`, err)
+      return
+    }
+
+    const insertList = this.db.prepare('INSERT OR IGNORE INTO lists (id, name, color, created_at) VALUES (?, ?, ?, ?)')
+    const insertSetting = this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
+    transaction(this.db, () => {
+      for (const l of legacy.lists ?? []) insertList.run(l.id, l.name, l.color, l.createdAt)
+      insertList.run(INBOX.id, INBOX.name, INBOX.color, Date.now())
+      const listIds = new Set([INBOX_ID, ...(legacy.lists ?? []).map((l) => l.id)])
+      for (const t of legacy.tasks ?? []) this.writeTask({ ...t, listId: listIds.has(t.listId) ? t.listId : INBOX_ID })
+      for (const [key, value] of Object.entries(legacy.settings ?? {})) {
+        if (key in defaultSettings) insertSetting.run(key, JSON.stringify(value))
+      }
+    })
+    fs.renameSync(file, `${file}.imported-backup`)
+    console.log(`Imported ${legacy.tasks?.length ?? 0} tasks from ${file} into SQLite`)
   }
 }
